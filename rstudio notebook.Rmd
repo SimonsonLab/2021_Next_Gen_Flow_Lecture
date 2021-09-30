@@ -1,0 +1,139 @@
+---
+title: "UMAP with flow cytometry data files"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
+```{r}
+#Install the pertinent libraries if necessary (some of you will have already done this).
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("flowCore")
+
+#Load the pertinent software libraries.  For more on how to use the flowCore package, see https://www.bioconductor.org/packages/release/bioc/vignettes/flowCore/inst/doc/HowTo-flowCore.pdf.
+library(flowCore)
+
+#Install the umap package if necessary.
+list.of.packages <- c("umap")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+#Load the pertinent software libraries.
+library(umap)
+```
+
+
+```{r}
+#Load an FCS file using the flowCore package.
+x <- read.FCS("ExampleData/CLL/fff38ca58e3629ad6089579aa3366964a92ffe04-4 CLL 9F 02 N08 001.LMD", transformation = FALSE)
+
+#We are going to use only 20000 data points, just to make the demonstration go faster.
+x <- x[1:20000, ]
+
+#Note that the saved listmode (lmd) file is already compensated, so there is no stored compensation matrix to be found.
+
+#List the fluorescence channels used.
+markernames(x)
+```
+
+Notice that we have "nix-APCA700" as one of the fluorescence channels.  This is actually an unused channel, so we would rather not include it in our later UMAP calculation.  Let's convert the data to a standard form (a "dataframe") that the UMAP algorithm can use, and not have "nix-APCA700" included.
+
+```{r}
+#Copy the data to a regular R dataframe object, which we name "df".
+df <- exprs(x)
+
+#"nix-APCA700" was the 9th name in the list, so we are going to drop that column.
+df <- subset(df, select = -c(9))
+
+#Show some of the data.
+head(df, 3)
+```
+
+Note that we could also ADD columns of data for calculation in the UMAP if desired...
+
+Now we will calculate a UMAP embedding/projection for the flow cytometry data.  Here are two websites that have good introductions for running UMAP:
+  For running in R/RStudio: https://cran.r-project.org/web/packages/umap/vignettes/umap.html
+  For running in Python: https://umap-learn.readthedocs.io/en/latest/
+
+First, we will run the UMAP and see what the results look like for NON-scaled data.
+
+```{r}
+#Set up the parameters we want to use in the UMAP algorithm.
+custom.config = umap.defaults
+custom.config$random_state = 123
+
+#Let's use a truncated version of the dataframe to speed up the calculation.
+df_subset <- df[1:2000, ] #Use the first 2000 data points.
+
+#Run the algorithm on the flow cytometry data dataframe.
+umap_results = umap(df_subset, config = custom.config)
+
+#Plot the results.
+plot(umap_results$layout, main = "UMAP of Non-Scaled Data")
+```
+
+Let's now scale the data (as we should).  We will scale the data by substracting the mean value for each fluorescence channel, then divide by the standard deviation of each channel.  This is simply accomplished through R's "scale" function.
+
+```{r}
+#Scale the data.
+df_subset_scaled <- scale(df_subset, center = TRUE, scale = TRUE)
+
+#Run the algorithm on the flow cytometry data dataframe.
+umap_results = umap(df_subset_scaled, config = custom.config)
+
+#Plot the results.
+plot(umap_results$layout, main = "UMAP of Scaled Data")
+```
+
+In the plot, it appears that some of the small clusters clustered a little closer to one of the large clusters.  This suggests they are actually fairly similar cell types (the scale of one or more parameters was likely causing an outsized impact on the UMAP algorithm).
+
+Now let's calculate the UMAP for the full dataframe.  This will take longer...
+
+```{r}
+#Scale the data.
+df_scaled <- scale(df, center = TRUE, scale = TRUE)
+
+#Run the UMAP algorithm.
+umap_results = umap(df_scaled, config = custom.config)
+
+#Plot the results.
+plot(umap_results$layout, main = "UMAP Data")
+```
+
+Now we want to create a new FCS file that includes the UMAP parameters (as pseudo-fluorescence channels), which we can then open in FlowJo.
+
+```{r}
+#Set up the columns the way we want them to show up in FlowJo.
+columns_to_add <- umap_results$layout
+colnames(columns_to_add) <- c("UMAP x", "UMAP y")
+head(columns_to_add, 3)
+
+#Now make the new data object for saving as the new flow cytometry data file.
+new_x <- x
+
+#Add the UMAP data.
+new_x <- fr_append_cols(new_x, columns_to_add)
+
+#Now save it as a new file.
+write.FCS(new_x, "ExampleData/CLL FCS file with UMAP channels added.fcs", what="numeric", delimiter = "|", endian="big")
+
+```
+
+We can do a quick check to see whether what we wrote is readable and looks appropriate.
+
+```{r}
+#Check whether the file we wrote is readable.
+#Load an FCS file using the flowCore package.
+y <- read.FCS("ExampleData/CLL FCS file with UMAP channels added.fcs", transformation = FALSE)
+df_y <- exprs(y)
+head(df_y, 3)
+```
+
